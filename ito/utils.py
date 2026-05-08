@@ -31,6 +31,10 @@ def get_cond_batch(atom_numbers, positions, t_phys):
     return batch
 
 
+def get_bridge_batch(atom_numbers, positions):
+    return get_batch_from_atom_numbers_and_position(atom_numbers, positions)
+
+
 def batch_to_tensor(batch):
     poss = [data.x for data in batch.to_data_list()]
     return torch.stack(poss)

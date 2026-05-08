@@ -58,6 +58,87 @@ class PaiNNTLScore(torch.nn.Module):
         return noise_batch
 
 
+class PaiNNBridgeScore(torch.nn.Module):
+    def __init__(
+        self,
+        n_features=32,
+        n_layers=2,
+        diff_steps=1000,
+        n_neighbors=100,
+        n_types=167,
+        dist_encoding="positional_encoding",
+    ):
+        super().__init__()
+        self.embed_0 = self._make_endpoint_embed(
+            n_features, n_layers, n_neighbors, n_types, dist_encoding
+        )
+        self.embed_T = self._make_endpoint_embed(
+            n_features, n_layers, n_neighbors, n_types, dist_encoding
+        )
+        self.fuse_inv = embedding.MLP(2 * n_features, n_features, n_features)
+        self.fuse_eqv = EquivariantLinear(2 * n_features, n_features)
+        self.edge_builder = embedding.AddEdges(n_neighbors=n_neighbors)
+
+        self.net = torch.nn.Sequential(
+            embedding.AddEdges(should_generate_edge_index=False),
+            embedding.PositionalEmbedding("t_diff", n_features, diff_steps),
+            embedding.CombineInvariantFeatures(2 * n_features, n_features),
+            PaiNNBase(n_features=n_features, dist_encoding=dist_encoding),
+        )
+
+    @staticmethod
+    def _make_endpoint_embed(n_features, n_layers, n_neighbors, n_types, dist_encoding):
+        return torch.nn.Sequential(
+            embedding.AddEdges(n_neighbors=n_neighbors),
+            embedding.AddEquivariantFeatures(n_features),
+            embedding.NominalEmbedding("atom_number", n_features, n_types=n_types),
+            PaiNNBase(
+                n_features=n_features,
+                n_features_out=n_features,
+                n_layers=n_layers,
+                dist_encoding=dist_encoding,
+            ),
+        )
+
+    def forward(self, noise_batch, batch_0, batch_T):
+        batch_0 = batch_0.clone()
+        batch_T = batch_T.clone()
+        noise_batch = noise_batch.clone()
+
+        embedded_0 = self.embed_0(batch_0)
+        embedded_T = self.embed_T(batch_T)
+
+        inv_cat = torch.cat(
+            [embedded_0.invariant_node_features, embedded_T.invariant_node_features],
+            dim=-1,
+        )
+        eqv_cat = torch.cat(
+            [
+                embedded_0.equivariant_node_features,
+                embedded_T.equivariant_node_features,
+            ],
+            dim=-2,
+        )
+
+        inv_fused = self.fuse_inv(inv_cat)
+        eqv_fused = self.fuse_eqv(eqv_cat)
+
+        # Stable edge graph: build once from the midpoint-init coords so
+        # high-noise diffusion steps don't produce degenerate neighbor sets.
+        edge_template = noise_batch.clone()
+        edge_template.x = 0.5 * (batch_0.x + batch_T.x)
+        edge_template = self.edge_builder(edge_template)
+
+        noise_batch.invariant_node_features = inv_fused
+        noise_batch.equivariant_node_features = eqv_fused
+        noise_batch.edge_index = edge_template.edge_index
+
+        dx = self.net(noise_batch).equivariant_node_features.squeeze()
+        noise_batch.x = noise_batch.x + dx
+
+        return noise_batch
+
+
 class PaiNNBase(torch.nn.Module):
     def __init__(
         self,

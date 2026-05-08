@@ -62,6 +62,54 @@ class ALA2Dataset(StochasticLaggedDataset):
         return {"batch_0": batch_0, "batch_t": batch_t}
 
 
+class MidpointBridgeDataset(data.Dataset):
+    def __init__(self, trajs, tau):
+        assert tau % 2 == 0, "tau must be even so that tau/2 lands on a stored frame"
+        self.tau = tau
+        self.tau_half = tau // 2
+
+        trajs = [traj for traj in trajs if len(traj) > tau]
+        self.data = np.concatenate(trajs)
+        self.data0_idx = np.zeros(
+            len(self.data) - tau * len(trajs), dtype=int
+        )
+
+        l = 0
+        l0 = 0
+        for traj in trajs:
+            dl = len(traj)
+            dl0 = len(traj) - tau
+            self.data0_idx[l0 : l0 + dl0] = range(l, l + dl0)
+            l += dl
+            l0 += dl0
+
+    def __len__(self):
+        return len(self.data0_idx)
+
+    def __getitem__(self, idx):
+        i = self.data0_idx[idx]
+        x0 = self.data[i]
+        xmid = self.data[i + self.tau_half]
+        xT = self.data[i + self.tau]
+        return self.process(x0, xmid, xT)
+
+    def process(self, x0, xmid, xT):
+        raise NotImplementedError
+
+
+class ALA2BridgeDataset(MidpointBridgeDataset):
+    def __init__(self, tau, distinguish=False, scale=False, path=None):
+        self.atom_numbers = get_ala2_atom_numbers(distinguish=distinguish)
+        trajs = get_ala2_trajs(path, scale)
+        super().__init__(trajs, tau)
+
+    def process(self, x0, xmid, xT):
+        batch_0 = utils.get_bridge_batch(self.atom_numbers, x0)
+        batch_mid = utils.get_bridge_batch(self.atom_numbers, xmid)
+        batch_T = utils.get_bridge_batch(self.atom_numbers, xT)
+        return {"batch_0": batch_0, "batch_mid": batch_mid, "batch_T": batch_T}
+
+
 def get_ala2_trajs(path=None, scale=False):
     filenames = download_ala2_trajs(path)
 
