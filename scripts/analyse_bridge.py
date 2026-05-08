@@ -12,6 +12,7 @@ from ito import data, utils
 
 def main(args):
     args.root = os.path.realpath(args.root)
+    ala2_path = os.path.join(args.root, "data/ala2")
     topology = data.get_ala2_top(args.root)
     analysis_dir = os.path.join(args.root, "analysis_bridge", utils.get_timestamp())
     os.makedirs(analysis_dir, exist_ok=True)
@@ -21,26 +22,38 @@ def main(args):
     )
 
     sample_dir = os.path.dirname(os.path.realpath(args.trajs))
+    sample_args = json.load(open(os.path.join(sample_dir, "args.json")))
+    tau = sample_args["tau"]
+    sampling_split = sample_args.get("split", "all")
+
     trajs = np.load(args.trajs)  # [n_pairs, 2^depth+1, n_atoms, 3]
     endpoints = np.load(os.path.join(sample_dir, "endpoints.npy"))  # [n_pairs, 2, n_atoms, 3]
     md_mid = np.load(os.path.join(sample_dir, "md_midpoints.npy"))  # [n_pairs, n_atoms, 3]
 
     n_pairs, n_frames, n_atoms, _ = trajs.shape
     depth = int(np.log2(n_frames - 1))
-    print(f"loaded {n_pairs} pairs, {n_frames} frames each (depth={depth})")
+    assert tau % (2**depth) == 0, (
+        f"tau={tau} not divisible by 2**depth={2**depth}; "
+        f"VAMP2 reference lag would not match the bridge frame spacing exactly."
+    )
+    ref_lag = tau // (2**depth)
+    print(
+        f"loaded {n_pairs} pairs, {n_frames} frames each "
+        f"(depth={depth}, tau={tau}, ref_lag={ref_lag}, sampling_split={sampling_split!r})"
+    )
 
     closure_check(trajs, endpoints)
 
     flat = trajs.reshape(-1, n_atoms, 3)
     phi, psi = compute_dihedral_angles(flat, topology)
 
-    ref_trajs = data.get_ala2_trajs(args.root)
+    ref_split = args.split if args.split != "match_sampling" else sampling_split
+    ref_trajs = data.select_ala2_split(data.get_ala2_trajs(ala2_path), ref_split)
     ref_flat = np.concatenate(ref_trajs)
     phi_ref, psi_ref = compute_dihedral_angles(ref_flat, topology)
 
     # Distribution metrics on full filled trajectory.
     vamp2_score = get_vamp2(trajs=trajs, topology=topology, lag=1)
-    ref_lag = max(args.tau // (2**depth), 1)
     ref_vamp2_score = get_vamp2(ref_trajs, topology=topology, lag=ref_lag)
     print(f"VAMP2 (bridge, lag=1): {vamp2_score}")
     print(f"VAMP2 (MD,     lag={ref_lag}): {ref_vamp2_score}")
@@ -65,8 +78,11 @@ def main(args):
             "vamp2": float(vamp2_score),
             "ref_vamp2": float(ref_vamp2_score),
             "ref_lag": ref_lag,
+            "tau": tau,
             "depth": depth,
             "n_pairs": n_pairs,
+            "sampling_split": sampling_split,
+            "ref_split": ref_split,
             "midpoint": midpoint_metrics,
         },
         open(os.path.join(analysis_dir, "metrics.json"), "w"),
@@ -113,9 +129,9 @@ def circular_rmse(a, b):
 if __name__ == "__main__":
     parser = ArgumentParser()
     # fmt: off
-    parser.add_argument("trajs",  nargs="?", default="storage/samples_bridge/latest", help="Path to the bridge trajectory .npy.")
-    parser.add_argument("--root", default="storage",                                  help="Base directory used by sampling.")
-    parser.add_argument("--tau",  type=int, default=1000,                             help="Bridge interval used at training/sampling time.")
+    parser.add_argument("trajs",   nargs="?", default="storage/samples_bridge/latest",  help="Path to the bridge trajectory .npy. tau is read from the sampling args.json next to it.")
+    parser.add_argument("--root",  default="storage",                                   help="Base directory used by sampling.")
+    parser.add_argument("--split", default="match_sampling", choices=("train", "test", "all", "match_sampling"), help="ALA2 split for the MD reference. Default mirrors the sampling split for an apples-to-apples comparison.")
     # fmt: on
 
     main(parser.parse_args())

@@ -98,9 +98,10 @@ class MidpointBridgeDataset(data.Dataset):
 
 
 class ALA2BridgeDataset(MidpointBridgeDataset):
-    def __init__(self, tau, distinguish=False, scale=False, path=None):
+    def __init__(self, tau, distinguish=False, scale=False, path=None, split="all"):
         self.atom_numbers = get_ala2_atom_numbers(distinguish=distinguish)
         trajs = get_ala2_trajs(path, scale)
+        trajs = select_ala2_split(trajs, split)
         super().__init__(trajs, tau)
 
     def process(self, x0, xmid, xT):
@@ -108,6 +109,17 @@ class ALA2BridgeDataset(MidpointBridgeDataset):
         batch_mid = utils.get_bridge_batch(self.atom_numbers, xmid)
         batch_T = utils.get_bridge_batch(self.atom_numbers, xT)
         return {"batch_0": batch_0, "batch_mid": batch_mid, "batch_T": batch_T}
+
+
+def select_ala2_split(trajs, split):
+    """Train on the first two MD trajectories, hold out the third for evaluation."""
+    if split == "all":
+        return trajs
+    if split == "train":
+        return trajs[:2]
+    if split == "test":
+        return trajs[2:]
+    raise ValueError(f"unknown ala2 split: {split!r}")
 
 
 def get_ala2_trajs(path=None, scale=False):

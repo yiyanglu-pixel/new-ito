@@ -43,6 +43,7 @@ def main(args):
         tau=args.tau,
         distinguish=not args.indistinguishable,
         scale=not args.unscaled,
+        split=args.split,
     )
 
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
@@ -53,6 +54,8 @@ def main(args):
     trainer = pl.Trainer(
         max_epochs=args.epochs,
         gradient_clip_val=1.0,
+        accelerator=args.accelerator,
+        devices=args.devices,
         callbacks=[checkpoint_callback],
     )
 
@@ -79,6 +82,9 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size",        type=int,            default=128,       help="Batch size for training.")
     parser.add_argument("--lr",                type=float,          default=1e-3,      help="Learning rate for the optimizer.")
     parser.add_argument("--tau",               type=int,            default=1000,      help="Bridge interval length (must be even). The model learns p(x_{t+tau/2} | x_t, x_{t+tau}).")
+    parser.add_argument("--split",             default="train",     choices=("train", "test", "all"), help="ALA2 split. 'train' uses trajs 0,1; 'test' uses traj 2 (held-out for evaluation); 'all' uses all three.")
+    parser.add_argument("--devices",           type=int,            default=1,         help="Number of devices for pl.Trainer. Defaults to 1 to avoid silently launching multi-GPU DDP.")
+    parser.add_argument("--accelerator",       default="auto",      help="pl.Trainer accelerator (e.g. 'gpu', 'cpu', 'auto').")
     parser.add_argument("--indistinguishable", action='store_true', help="Enable this flag to treat atoms as indistinguishable.")
     parser.add_argument("--unscaled",          action='store_true', help="Use unscaled data. When disabled, data is scaled to unit variance.")
     # fmt: on

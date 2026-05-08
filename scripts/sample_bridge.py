@@ -10,6 +10,11 @@ from ito.model import ddpm
 
 
 def main(args):
+    assert args.tau % (2**args.depth) == 0, (
+        f"tau={args.tau} must be divisible by 2**depth={2**args.depth} so every "
+        f"recursion midpoint lands on an integer MD frame for evaluation."
+    )
+
     args.root = os.path.realpath(args.root)
     ala2_path = os.path.join(args.root, "data/ala2")
     samples_root = os.path.join(args.root, "samples_bridge")
@@ -18,15 +23,28 @@ def main(args):
     md_midpoints_path = os.path.join(samples_dir, "md_midpoints.npy")
     endpoints_path = os.path.join(samples_dir, "endpoints.npy")
 
-    ala2_trajs = np.concatenate(data.get_ala2_trajs(ala2_path, not args.unscaled))
+    trajs_list = data.get_ala2_trajs(ala2_path, not args.unscaled)
+    trajs_list = data.select_ala2_split(trajs_list, args.split)
     ala2_atom_numbers = data.get_ala2_atom_numbers(not args.indistinguishable)
+
+    valid_starts = []
+    offset = 0
+    for traj in trajs_list:
+        if len(traj) > args.tau:
+            valid_starts.extend(range(offset, offset + len(traj) - args.tau))
+        offset += len(traj)
+    valid_starts = np.array(valid_starts)
+    assert len(valid_starts) >= args.n_pairs, (
+        f"only {len(valid_starts)} valid starts in split={args.split!r}; "
+        f"need n_pairs={args.n_pairs}"
+    )
 
     model = ddpm.BridgeDDPM.load_from_checkpoint(args.checkpoint)
     model.eval()
 
     rng = np.random.default_rng(args.seed)
-    max_start = len(ala2_trajs) - args.tau - 1
-    start_idx = rng.integers(0, max_start, size=args.n_pairs)
+    ala2_trajs = np.concatenate(trajs_list)
+    start_idx = rng.choice(valid_starts, size=args.n_pairs, replace=False)
 
     left_positions = ala2_trajs[start_idx]
     right_positions = ala2_trajs[start_idx + args.tau]
@@ -88,6 +106,7 @@ if __name__ == "__main__":
     parser.add_argument("--depth",             type=int,            default=4,                                  help="Recursion depth k; output trajectory has 2^k+1 frames per pair.")
     parser.add_argument("--ode_steps",         type=int,            default=50,                                 help="Number of steps for the DPM-Solver during sampling. Set to 0 for vanilla denoising.")
     parser.add_argument("--seed",              type=int,            default=0,                                  help="RNG seed for selecting endpoint pairs.")
+    parser.add_argument("--split",             default="test",      choices=("train", "test", "all"),           help="ALA2 split for endpoint sampling. Default 'test' (held-out traj 2).")
     parser.add_argument("--indistinguishable", action="store_true", help="Treat atoms as indistinguishable; must match training.")
     parser.add_argument("--unscaled",          action="store_true", help="Use unscaled data; must match training.")
     # fmt: on
