@@ -187,7 +187,11 @@ Per-script flags via `--help`. Notable defaults that differ from the upstream TL
 - `sample_bridge.py` asserts `τ % 2^depth == 0` so every recursion midpoint lands on an integer MD frame and the VAMP2 reference lag is exact (no silent truncation).
 - `analyse_bridge.py` reads `τ` and the sampling split from the saved `args.json`; the MD reference defaults to the same split as sampling.
 
-Outputs follow the upstream pattern, in `storage/train_bridge/`, `storage/samples_bridge/`, and `storage/analysis_bridge/`. The original `train_tlddpm.py` / `sample_tlddpm.py` / `analyse_trajs.py` scripts and the `TLDDPM` model are left untouched.
+Outputs follow the upstream pattern, in `storage/train_bridge/`, `storage/samples_bridge/`, and `storage/analysis_bridge/`. The `TLDDPM` model and `PaiNNTLScore` architecture are left untouched.
+
+### Aligned ITO vs Bridge evaluation
+
+For head-to-head comparison the upstream `train_tlddpm.py` / `sample_tlddpm.py` / `analyse_trajs.py` scripts now match the bridge scripts' evaluation hygiene: `--seed`, `--split` (default `train` / `test` / `match_sampling`), `--n_neighbors`, `--length_scale`, `--devices`, `--accelerator`, and `--grid` are exposed everywhere; `analyse_trajs.py` writes a canonical `metrics.json`; the upstream `overfit_batches=1` Lightning bug in `train_tlddpm.py` is removed. `scripts/summarise_ala2_metrics.py` aggregates all `metrics.json` files across runs, groups by `(grid, model_type)`, and reports mean / std across seeds. See [`docs/bridge.md`](docs/bridge.md) for the full runbook.
 
 
 To cite this work, please use the bibtex: 

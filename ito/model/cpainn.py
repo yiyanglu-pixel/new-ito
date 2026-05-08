@@ -15,6 +15,7 @@ class PaiNNTLScore(torch.nn.Module):
         diff_steps=1000,
         n_neighbors=100,
         n_types=167,
+        length_scale=10,
         dist_encoding="positional_encoding",
     ):
         super().__init__()
@@ -28,6 +29,7 @@ class PaiNNTLScore(torch.nn.Module):
                 n_features=n_features,
                 n_features_out=n_features,
                 n_layers=n_layers,
+                length_scale=length_scale,
                 dist_encoding=dist_encoding,
             ),
         )
@@ -36,7 +38,11 @@ class PaiNNTLScore(torch.nn.Module):
             embedding.AddEdges(should_generate_edge_index=False),
             embedding.PositionalEmbedding("t_diff", n_features, diff_steps),
             embedding.CombineInvariantFeatures(2 * n_features, n_features),
-            PaiNNBase(n_features=n_features, dist_encoding=dist_encoding),
+            PaiNNBase(
+                n_features=n_features,
+                length_scale=length_scale,
+                dist_encoding=dist_encoding,
+            ),
         )
 
     def forward(self, noise_batch, batch_0):
@@ -66,14 +72,15 @@ class PaiNNBridgeScore(torch.nn.Module):
         diff_steps=1000,
         n_neighbors=100,
         n_types=167,
+        length_scale=10,
         dist_encoding="positional_encoding",
     ):
         super().__init__()
         self.embed_0 = self._make_endpoint_embed(
-            n_features, n_layers, n_neighbors, n_types, dist_encoding
+            n_features, n_layers, n_neighbors, n_types, length_scale, dist_encoding
         )
         self.embed_T = self._make_endpoint_embed(
-            n_features, n_layers, n_neighbors, n_types, dist_encoding
+            n_features, n_layers, n_neighbors, n_types, length_scale, dist_encoding
         )
         self.fuse_inv = embedding.MLP(2 * n_features, n_features, n_features)
         self.fuse_eqv = EquivariantLinear(2 * n_features, n_features)
@@ -83,11 +90,17 @@ class PaiNNBridgeScore(torch.nn.Module):
             embedding.AddEdges(should_generate_edge_index=False),
             embedding.PositionalEmbedding("t_diff", n_features, diff_steps),
             embedding.CombineInvariantFeatures(2 * n_features, n_features),
-            PaiNNBase(n_features=n_features, dist_encoding=dist_encoding),
+            PaiNNBase(
+                n_features=n_features,
+                length_scale=length_scale,
+                dist_encoding=dist_encoding,
+            ),
         )
 
     @staticmethod
-    def _make_endpoint_embed(n_features, n_layers, n_neighbors, n_types, dist_encoding):
+    def _make_endpoint_embed(
+        n_features, n_layers, n_neighbors, n_types, length_scale, dist_encoding
+    ):
         return torch.nn.Sequential(
             embedding.AddEdges(n_neighbors=n_neighbors),
             embedding.AddEquivariantFeatures(n_features),
@@ -96,6 +109,7 @@ class PaiNNBridgeScore(torch.nn.Module):
                 n_features=n_features,
                 n_features_out=n_features,
                 n_layers=n_layers,
+                length_scale=length_scale,
                 dist_encoding=dist_encoding,
             ),
         )

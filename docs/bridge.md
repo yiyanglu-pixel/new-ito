@@ -267,11 +267,95 @@ Numbers reported from a fresh end-to-end run on this branch:
   `KL(p_bridge(x_{τ/2} | x_0, x_τ) ‖ p_ITO(x_{τ/2} | x_0))` to align the
   bridge's marginal with ITO's.
 
-## 10. Change log
+## 10. Aligned ITO vs Bridge evaluation protocol
+
+The upstream `train_tlddpm.py` / `sample_tlddpm.py` / `analyse_trajs.py`
+scripts now mirror the bridge scripts' evaluation hygiene so the two
+models can be compared head-to-head:
+
+- `--seed` plumbed everywhere via `pl.seed_everything(seed, workers=True)`.
+- `--split {train|test|all}` on `train_tlddpm.py` (default `train`),
+  `sample_tlddpm.py` (default `test`), `analyse_trajs.py`
+  (default `match_sampling`). Same semantics as the bridge side.
+- `--n_neighbors` and `--length_scale` exposed on both train scripts and
+  threaded through `PaiNNTLScore` / `PaiNNBridgeScore` to `PaiNNBase`
+  (previously the `PaiNNBase(length_scale=…)` kwarg was a no-op because
+  the score nets never passed it through).
+- `--grid` free-form tag on both sample scripts, written to `args.json`.
+- `--devices` / `--accelerator` on both train scripts so PyTorch Lightning
+  doesn't silently launch multi-GPU DDP.
+- `train_tlddpm.py`'s `overfit_batches=1` (an upstream bug) removed.
+- `analyse_trajs.py` now writes `metrics.json` (canonical schema:
+  `model_type`, `grid`, `seed`, `sampling_split`, `ref_split`, `lag`,
+  `ref_lag`, `vamp2`, `ref_vamp2`, `n_traj`) alongside the original
+  `vamp2_scores.json` for upstream compatibility.
+- `analyse_bridge.py`'s `metrics.json` extended with `model_type`,
+  `grid`, `seed` so summarisation groups runs correctly.
+- `scripts/summarise_ala2_metrics.py` aggregates `metrics.json` files
+  across multiple `storage_*` directories, groups by
+  `(grid, model_type)`, reports mean / std across seeds, and writes
+  `summary.csv`, `summary.md`, and a copy of the raw metrics to
+  `--out_dir`.
+
+### Runbook
+
+Three-seed, two-grid comparison:
+
+```bash
+# Grid A (tau=1000, lag=125, 9 frames per trajectory unit)
+for s in 0 1 2; do
+  python scripts/train_bridge.py --root storage_bridge_A_s$s --tau 1000 --seed $s
+  python scripts/sample_bridge.py storage_bridge_A_s$s/train_bridge/latest/best \
+      --root storage_bridge_A_s$s --tau 1000 --depth 3 --n_pairs 1000 \
+      --seed $s --grid A
+  python scripts/analyse_bridge.py storage_bridge_A_s$s/samples_bridge/latest \
+      --root storage_bridge_A_s$s
+
+  python scripts/train_tlddpm.py --root storage_ito_A_s$s --max_lag 1000 --seed $s
+  python scripts/sample_tlddpm.py storage_ito_A_s$s/train/latest/best \
+      --root storage_ito_A_s$s --lag 125 --traj_length 8 --samples 1000 \
+      --seed $s --grid A
+  python scripts/analyse_trajs.py storage_ito_A_s$s/samples/latest \
+      --root storage_ito_A_s$s --lag 125
+done
+
+# Grid B (tau=800, lag=100, also 9 frames per trajectory unit)
+for s in 0 1 2; do
+  python scripts/train_bridge.py --root storage_bridge_B_s$s --tau 800 --seed $s
+  python scripts/sample_bridge.py storage_bridge_B_s$s/train_bridge/latest/best \
+      --root storage_bridge_B_s$s --tau 800 --depth 3 --n_pairs 1000 \
+      --seed $s --grid B
+  python scripts/analyse_bridge.py storage_bridge_B_s$s/samples_bridge/latest \
+      --root storage_bridge_B_s$s
+
+  python scripts/train_tlddpm.py --root storage_ito_B_s$s --max_lag 800 --seed $s
+  python scripts/sample_tlddpm.py storage_ito_B_s$s/train/latest/best \
+      --root storage_ito_B_s$s --lag 100 --traj_length 8 --samples 1000 \
+      --seed $s --grid B
+  python scripts/analyse_trajs.py storage_ito_B_s$s/samples/latest \
+      --root storage_ito_B_s$s --lag 100
+done
+
+# Aggregate
+python scripts/summarise_ala2_metrics.py 'storage_*/*/*/metrics.json' \
+    --out_dir storage_eval_summary
+```
+
+Defaults already match the protocol (`--epochs 50 --batch_size 128 --lr 1e-3
+--diff_steps 1000 --n_features 64 --n_layers 2 --n_neighbors 100
+--length_scale 10 --ode_steps 50`); pass `--length_scale 3` to both train
+scripts for the paper-alignment sensitivity run.
+
+The bridge requires `tau % 2**depth == 0`; for `depth=3` choose
+`tau ∈ {200, 400, 800, 1000, ...}` (1000 is divisible because
+`1000 = 8 · 125`).
+
+## 11. Change log
 
 | Commit | Summary |
 |---|---|
-| `17af6f3` | Add midpoint diffusion bridge ITO surrogate variant — initial Phase 1 implementation: dataset, score net, DDPM module, train / sample / analyse scripts. |
+| `17af6f3` | Initial Phase 1 implementation: dataset, score net, DDPM module, train / sample / analyse scripts. |
 | `441f72c` | `.gitignore` for Python bytecode and local training artifacts. |
-| `13e8e56` | Evaluation hygiene fixes — per-trajectory endpoint sampling (no cross-trajectory pairs), `tau % 2^depth` divisibility assertion, MD reference path matches train/sample (`root/data/ala2`), `tau` read from sampling `args.json`, train/test/all split semantics, `train_bridge.py` defaults `--devices 1` and `--accelerator auto`. |
-| `0b1731f` | Default `sample_bridge --depth 3` so the no-arg defaults `--tau 1000 --depth 3` run end-to-end without hitting the divisibility assertion. |
+| `13e8e56` | Evaluation hygiene fixes — per-trajectory endpoint sampling, `tau % 2^depth` divisibility assertion, MD reference path matches train/sample, `tau` read from sampling `args.json`, train/test/all split semantics, `--devices 1` / `--accelerator auto` defaults. |
+| `0b1731f` | Default `sample_bridge --depth 3` so the no-arg defaults run end-to-end without hitting the divisibility assertion. |
+| (this commit) | Aligned ITO vs Bridge evaluation protocol — `--seed` everywhere, `--split` plumbed through ITO scripts, `--n_neighbors` / `--length_scale` exposed and threaded through PaiNN, `--grid` tag, `analyse_trajs.py` writes `metrics.json`, `train_tlddpm.py`'s `overfit_batches=1` removed, new `scripts/summarise_ala2_metrics.py`. |

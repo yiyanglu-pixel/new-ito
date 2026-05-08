@@ -49,10 +49,17 @@ class StochasticLaggedDataset(data.Dataset):
 
 class ALA2Dataset(StochasticLaggedDataset):
     def __init__(
-        self, max_lag, distinguish=False, scale=False, fixed_lag=False, path=None
+        self,
+        max_lag,
+        distinguish=False,
+        scale=False,
+        fixed_lag=False,
+        path=None,
+        split="all",
     ):
         self.atom_numbers = get_ala2_atom_numbers(distinguish=distinguish)
         trajs = get_ala2_trajs(path, scale)
+        trajs = select_ala2_split(trajs, split)
 
         super().__init__(trajs, max_lag, fixed_lag=fixed_lag)
 

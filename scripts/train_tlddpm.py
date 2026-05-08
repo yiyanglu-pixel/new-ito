@@ -11,6 +11,8 @@ from ito.model import cpainn, ddpm
 
 
 def main(args):
+    pl.seed_everything(args.seed, workers=True)
+
     score_model_class = cpainn.PaiNNTLScore
     ala2_path = os.path.join(args.root, "data/ala2")
     timestamp = utils.get_timestamp()
@@ -25,8 +27,11 @@ def main(args):
 
     score_model_kwargs = {
         "n_features": args.n_features,
+        "n_layers": args.n_layers,
         "max_lag": args.max_lag,
         "diff_steps": args.diff_steps,
+        "n_neighbors": args.n_neighbors,
+        "length_scale": args.length_scale,
     }
 
     model = ddpm.TLDDPM(
@@ -42,6 +47,7 @@ def main(args):
         distinguish=not args.indistinguishable,
         fixed_lag=args.fixed_lag,
         scale=not args.unscaled,
+        split=args.split,
     )
 
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
@@ -52,7 +58,8 @@ def main(args):
     trainer = pl.Trainer(
         max_epochs=args.epochs,
         gradient_clip_val=1.0,
-        overfit_batches=1,
+        accelerator=args.accelerator,
+        devices=args.devices,
         callbacks=[checkpoint_callback],
     )
 
@@ -74,15 +81,20 @@ if __name__ == "__main__":
     parser.add_argument("--root",              type=str,            default="storage", help="Base directory for storing data and training outputs.")
     parser.add_argument("--n_features",        type=int,            default=64,        help="Number of features for the model.")
     parser.add_argument("--n_layers",          type=int,            default=2,         help="Number of layers in the model.")
+    parser.add_argument("--n_neighbors",       type=int,            default=100,       help="Maximum neighbors per node in the PaiNN graph.")
+    parser.add_argument("--length_scale",      type=float,          default=10,        help="Length scale for PaiNN's distance positional encoder.")
     parser.add_argument("--epochs",            type=int,            default=50,        help="Number of training epochs.")
     parser.add_argument("--diff_steps",        type=int,            default=1000,      help="Number of diffusion steps in the model.")
     parser.add_argument("--batch_size",        type=int,            default=128,       help="Batch size for training.")
     parser.add_argument("--lr",                type=float,          default=1e-3,      help="Learning rate for the optimizer.")
     parser.add_argument("--max_lag",           type=int,            default=1000,      help="Maximum lag to consider in the ALA2 dataset.")
+    parser.add_argument("--seed",              type=int,            default=0,         help="Seed for python/numpy/torch and DataLoader workers.")
+    parser.add_argument("--split",             default="train",     choices=("train", "test", "all"), help="ALA2 split. 'train' uses trajs 0,1; 'test' uses traj 2; 'all' uses all three.")
+    parser.add_argument("--devices",           type=int,            default=1,         help="Number of devices for pl.Trainer. Default 1 to avoid silently launching multi-GPU DDP.")
+    parser.add_argument("--accelerator",       default="auto",      help="pl.Trainer accelerator (e.g. 'gpu', 'cpu', 'auto').")
     parser.add_argument("--fixed_lag",         action='store_true', help="Enable to use a fixed lag value, disabled by default.")
     parser.add_argument("--indistinguishable", action='store_true', help="Enable this flag to treat atoms as indistinguishable.")
     parser.add_argument("--unscaled",          action='store_true', help="Use unscaled data. When disabled, data is scaled to unit variance.")
-
     # fmt: on
 
     main(parser.parse_args())

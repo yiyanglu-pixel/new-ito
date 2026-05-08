@@ -12,6 +12,7 @@ from ito.model import cpainn, ddpm
 
 def main(args):
     assert args.tau % 2 == 0, "tau must be even so that tau/2 lands on a stored frame"
+    pl.seed_everything(args.seed, workers=True)
 
     score_model_class = cpainn.PaiNNBridgeScore
     ala2_path = os.path.join(args.root, "data/ala2")
@@ -29,6 +30,8 @@ def main(args):
         "n_features": args.n_features,
         "n_layers": args.n_layers,
         "diff_steps": args.diff_steps,
+        "n_neighbors": args.n_neighbors,
+        "length_scale": args.length_scale,
     }
 
     model = ddpm.BridgeDDPM(
@@ -77,6 +80,9 @@ if __name__ == "__main__":
     parser.add_argument("--root",              type=str,            default="storage", help="Base directory for storing data and training outputs.")
     parser.add_argument("--n_features",        type=int,            default=64,        help="Number of features for the model.")
     parser.add_argument("--n_layers",          type=int,            default=2,         help="Number of layers in the endpoint embedding PaiNN.")
+    parser.add_argument("--n_neighbors",       type=int,            default=100,       help="Maximum neighbors per node in the PaiNN graph.")
+    parser.add_argument("--length_scale",      type=float,          default=10,        help="Length scale for PaiNN's distance positional encoder.")
+    parser.add_argument("--seed",              type=int,            default=0,         help="Seed for python/numpy/torch and DataLoader workers.")
     parser.add_argument("--epochs",            type=int,            default=50,        help="Number of training epochs.")
     parser.add_argument("--diff_steps",        type=int,            default=1000,      help="Number of diffusion steps in the model.")
     parser.add_argument("--batch_size",        type=int,            default=128,       help="Batch size for training.")

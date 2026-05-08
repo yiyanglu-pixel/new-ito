@@ -3,6 +3,7 @@ import os
 from argparse import ArgumentParser
 
 import numpy as np
+import pytorch_lightning as pl
 import torch
 
 from ito import data, utils
@@ -14,6 +15,7 @@ def main(args):
         f"tau={args.tau} must be divisible by 2**depth={2**args.depth} so every "
         f"recursion midpoint lands on an integer MD frame for evaluation."
     )
+    pl.seed_everything(args.seed, workers=True)
 
     args.root = os.path.realpath(args.root)
     ala2_path = os.path.join(args.root, "data/ala2")
@@ -105,8 +107,9 @@ if __name__ == "__main__":
     parser.add_argument("--tau",               type=int,            default=1000,                               help="Endpoint separation in MD frames. Must match the tau used during training.")
     parser.add_argument("--depth",             type=int,            default=3,                                  help="Recursion depth k; output trajectory has 2^k+1 frames per pair. Must satisfy tau %% 2**depth == 0.")
     parser.add_argument("--ode_steps",         type=int,            default=50,                                 help="Number of steps for the DPM-Solver during sampling. Set to 0 for vanilla denoising.")
-    parser.add_argument("--seed",              type=int,            default=0,                                  help="RNG seed for selecting endpoint pairs.")
+    parser.add_argument("--seed",              type=int,            default=0,                                  help="RNG seed for selecting endpoint pairs and diffusion noise.")
     parser.add_argument("--split",             default="test",      choices=("train", "test", "all"),           help="ALA2 split for endpoint sampling. Default 'test' (held-out traj 2).")
+    parser.add_argument("--grid",              default=None,                                                    help="Free-form tag written to args.json so summarisers can group runs.")
     parser.add_argument("--indistinguishable", action="store_true", help="Treat atoms as indistinguishable; must match training.")
     parser.add_argument("--unscaled",          action="store_true", help="Use unscaled data; must match training.")
     # fmt: on

@@ -3,6 +3,7 @@ import os
 from argparse import ArgumentParser
 
 import numpy as np
+import pytorch_lightning as pl
 from tqdm import tqdm
 
 from ito import data, utils
@@ -10,15 +11,21 @@ from ito.model import ddpm
 
 
 def main(args):
+    pl.seed_everything(args.seed, workers=True)
+
     args.root = os.path.realpath(args.root)
     ala2_path = os.path.join(args.root, "data/ala2")
     samples_root = os.path.join(args.root, "samples")
     samples_dir = os.path.join(samples_root, utils.get_timestamp())
     samples_path = os.path.join(samples_dir, "trajectory.npy")
 
-    ala2_trajs = np.concatenate(data.get_ala2_trajs(ala2_path, not args.unscaled))
-    np.random.shuffle(ala2_trajs)
+    trajs_list = data.get_ala2_trajs(ala2_path, not args.unscaled)
+    trajs_list = data.select_ala2_split(trajs_list, args.split)
+    ala2_trajs = np.concatenate(trajs_list)
     ala2_atom_numbers = data.get_ala2_atom_numbers(not args.indistinguishable)
+
+    rng = np.random.default_rng(args.seed)
+    rng.shuffle(ala2_trajs)
 
     model = ddpm.TLDDPM.load_from_checkpoint(args.checkpoint)
 
@@ -42,10 +49,12 @@ def main(args):
         args.__dict__, open(os.path.join(samples_dir, "args.json"), "w"), indent=4
     )
     np.save(samples_path, trajectory)
-    os.symlink(src=os.path.abspath(samples_path), dst=os.path.join(samples_root, "latest"))
+    latest_link = os.path.join(samples_root, "latest")
+    if os.path.exists(latest_link) or os.path.islink(latest_link):
+        os.unlink(latest_link)
+    os.symlink(src=os.path.abspath(samples_path), dst=latest_link)
 
     print(f"samples saved at {samples_path}")
-
 
 
 if __name__ == "__main__":
@@ -58,9 +67,12 @@ if __name__ == "__main__":
     parser.add_argument("--traj_length",       type=int,            default=100,                         help="The total number of steps (frames) in each generated trajectory.")
     parser.add_argument("--lag",               type=int,            default=100,                         help="Temporal lag between consecutive steps (frames) in the generated trajectory.")
     parser.add_argument("--ode_steps",         type=int,            default=50,                          help="Number of steps for the ODE solver during sampling. Set to 0 for normal denoising.")
+    parser.add_argument("--seed",              type=int,            default=0,                           help="Seed for python/numpy/torch RNG and the held-out trajectory shuffle.")
+    parser.add_argument("--split",             default="test",      choices=("train", "test", "all"),    help="ALA2 split for sampling initial positions. Default 'test' (held-out traj 2).")
+    parser.add_argument("--grid",              default=None,        help="Free-form tag written to args.json so summarisers can group runs.")
     parser.add_argument("--indistinguishable", action="store_true", help="Enable this flag to treat atoms as indistinguishable in the model.")
     parser.add_argument("--unscaled",          action="store_true", help="Enable this flag to use unscaled data. By default, data is scaled to have unit variance.")
-    parser.add_argument("--init_from_eq",           action="store_true", help="Initiate trajectories at from random configurations from the equilibrium distributions rather than from a single point")
+    parser.add_argument("--init_from_eq",      action="store_true", help="Initiate trajectories at from random configurations from the equilibrium distributions rather than from a single point")
     # fmt: on
 
     main(parser.parse_args())

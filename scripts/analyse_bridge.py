@@ -25,6 +25,8 @@ def main(args):
     sample_args = json.load(open(os.path.join(sample_dir, "args.json")))
     tau = sample_args["tau"]
     sampling_split = sample_args.get("split", "all")
+    seed = sample_args.get("seed")
+    grid = sample_args.get("grid")
 
     trajs = np.load(args.trajs)  # [n_pairs, 2^depth+1, n_atoms, 3]
     endpoints = np.load(os.path.join(sample_dir, "endpoints.npy"))  # [n_pairs, 2, n_atoms, 3]
@@ -75,14 +77,17 @@ def main(args):
 
     json.dump(
         {
-            "vamp2": float(vamp2_score),
-            "ref_vamp2": float(ref_vamp2_score),
-            "ref_lag": ref_lag,
-            "tau": tau,
-            "depth": depth,
-            "n_pairs": n_pairs,
+            "model_type": "bridge",
+            "grid": grid,
+            "seed": seed,
             "sampling_split": sampling_split,
             "ref_split": ref_split,
+            "tau": tau,
+            "depth": depth,
+            "ref_lag": ref_lag,
+            "n_pairs": n_pairs,
+            "vamp2": float(vamp2_score),
+            "ref_vamp2": float(ref_vamp2_score),
             "midpoint": midpoint_metrics,
         },
         open(os.path.join(analysis_dir, "metrics.json"), "w"),
