@@ -103,7 +103,7 @@ if __name__ == "__main__":
     parser.add_argument("--root",              default="storage",   help="Base path for input data and where output samples will be stored.")
     parser.add_argument("--n_pairs",           type=int,            default=10,                                 help="Number of (x_t, x_{t+tau}) pairs to draw from MD data and fill in.")
     parser.add_argument("--tau",               type=int,            default=1000,                               help="Endpoint separation in MD frames. Must match the tau used during training.")
-    parser.add_argument("--depth",             type=int,            default=4,                                  help="Recursion depth k; output trajectory has 2^k+1 frames per pair.")
+    parser.add_argument("--depth",             type=int,            default=3,                                  help="Recursion depth k; output trajectory has 2^k+1 frames per pair. Must satisfy tau %% 2**depth == 0.")
     parser.add_argument("--ode_steps",         type=int,            default=50,                                 help="Number of steps for the DPM-Solver during sampling. Set to 0 for vanilla denoising.")
     parser.add_argument("--seed",              type=int,            default=0,                                  help="RNG seed for selecting endpoint pairs.")
     parser.add_argument("--split",             default="test",      choices=("train", "test", "all"),           help="ALA2 split for endpoint sampling. Default 'test' (held-out traj 2).")
