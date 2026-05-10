@@ -49,10 +49,17 @@ class StochasticLaggedDataset(data.Dataset):
 
 class ALA2Dataset(StochasticLaggedDataset):
     def __init__(
-        self, max_lag, distinguish=False, scale=False, fixed_lag=False, path=None
+        self,
+        max_lag,
+        distinguish=False,
+        scale=False,
+        fixed_lag=False,
+        path=None,
+        split="all",
     ):
         self.atom_numbers = get_ala2_atom_numbers(distinguish=distinguish)
         trajs = get_ala2_trajs(path, scale)
+        trajs = select_ala2_split(trajs, split)
 
         super().__init__(trajs, max_lag, fixed_lag=fixed_lag)
 
@@ -60,6 +67,66 @@ class ALA2Dataset(StochasticLaggedDataset):
         batch_0 = utils.get_cond_batch(self.atom_numbers, x0, t)
         batch_t = utils.get_cond_batch(self.atom_numbers, xt, t)
         return {"batch_0": batch_0, "batch_t": batch_t}
+
+
+class MidpointBridgeDataset(data.Dataset):
+    def __init__(self, trajs, tau):
+        assert tau % 2 == 0, "tau must be even so that tau/2 lands on a stored frame"
+        self.tau = tau
+        self.tau_half = tau // 2
+
+        trajs = [traj for traj in trajs if len(traj) > tau]
+        self.data = np.concatenate(trajs)
+        self.data0_idx = np.zeros(
+            len(self.data) - tau * len(trajs), dtype=int
+        )
+
+        l = 0
+        l0 = 0
+        for traj in trajs:
+            dl = len(traj)
+            dl0 = len(traj) - tau
+            self.data0_idx[l0 : l0 + dl0] = range(l, l + dl0)
+            l += dl
+            l0 += dl0
+
+    def __len__(self):
+        return len(self.data0_idx)
+
+    def __getitem__(self, idx):
+        i = self.data0_idx[idx]
+        x0 = self.data[i]
+        xmid = self.data[i + self.tau_half]
+        xT = self.data[i + self.tau]
+        return self.process(x0, xmid, xT)
+
+    def process(self, x0, xmid, xT):
+        raise NotImplementedError
+
+
+class ALA2BridgeDataset(MidpointBridgeDataset):
+    def __init__(self, tau, distinguish=False, scale=False, path=None, split="all"):
+        self.atom_numbers = get_ala2_atom_numbers(distinguish=distinguish)
+        trajs = get_ala2_trajs(path, scale)
+        trajs = select_ala2_split(trajs, split)
+        super().__init__(trajs, tau)
+
+    def process(self, x0, xmid, xT):
+        batch_0 = utils.get_bridge_batch(self.atom_numbers, x0)
+        batch_mid = utils.get_bridge_batch(self.atom_numbers, xmid)
+        batch_T = utils.get_bridge_batch(self.atom_numbers, xT)
+        return {"batch_0": batch_0, "batch_mid": batch_mid, "batch_T": batch_T}
+
+
+def select_ala2_split(trajs, split):
+    """Train on the first two MD trajectories, hold out the third for evaluation."""
+    if split == "all":
+        return trajs
+    if split == "train":
+        return trajs[:2]
+    if split == "test":
+        return trajs[2:]
+    raise ValueError(f"unknown ala2 split: {split!r}")
 
 
 def get_ala2_trajs(path=None, scale=False):

@@ -12,6 +12,7 @@ from ito import data, utils
 
 def main(args):
     args.root = os.path.realpath(args.root)
+    ala2_path = os.path.join(args.root, "data/ala2")
     topology = data.get_ala2_top(args.root)
     analysis_dir = os.path.join(args.root, "analysis", utils.get_timestamp())
     os.makedirs(analysis_dir, exist_ok=True)
@@ -20,11 +21,41 @@ def main(args):
         args.__dict__, open(os.path.join(analysis_dir, "args.json"), "w"), indent=4
     )
 
+    sample_dir = os.path.dirname(os.path.realpath(args.trajs))
+    sampling_args_path = os.path.join(sample_dir, "args.json")
+    sampling_args = (
+        json.load(open(sampling_args_path)) if os.path.exists(sampling_args_path) else {}
+    )
+    lag = args.lag if args.lag is not None else sampling_args.get("lag", 100)
+    sampling_split = sampling_args.get("split", "all")
+    seed = sampling_args.get("seed")
+    grid = sampling_args.get("grid")
+
+    ref_split = args.split if args.split != "match_sampling" else sampling_split
+
     trajs = np.load(args.trajs)
     vamp2_score = get_vamp2(trajs=trajs, topology=topology, lag=1)
 
-    ref_trajs = data.get_ala2_trajs(args.root)
-    ref_vamp2_score = get_vamp2(ref_trajs, topology=topology, lag=args.lag)
+    ref_trajs = data.select_ala2_split(data.get_ala2_trajs(ala2_path), ref_split)
+    ref_vamp2_score = get_vamp2(ref_trajs, topology=topology, lag=lag)
+
+    metrics = {
+        "model_type": "ito",
+        "grid": grid,
+        "seed": seed,
+        "sampling_split": sampling_split,
+        "ref_split": ref_split,
+        "lag": lag,
+        "ref_lag": lag,
+        "vamp2": float(vamp2_score),
+        "ref_vamp2": float(ref_vamp2_score),
+        "n_traj": int(trajs.shape[0]) if trajs.ndim >= 2 else 1,
+    }
+    json.dump(
+        metrics,
+        open(os.path.join(analysis_dir, "metrics.json"), "w"),
+        indent=4,
+    )
     json.dump(
         {"vamp2": vamp2_score, "ref_vamp2": ref_vamp2_score},
         open(os.path.join(analysis_dir, "vamp2_scores.json"), "w"),
@@ -64,7 +95,6 @@ def main(args):
 
     ax.legend()
     plt.savefig(os.path.join(analysis_dir, "ramachandran.pdf"))
-    plt.show()
 
 
 def plot_marginal(ax, marginal, bins=64, label=None):
@@ -130,10 +160,11 @@ def get_vamp2(trajs, lag, topology):
 if __name__ == "__main__":
     parser = ArgumentParser()
     # fmt: off
-    parser.add_argument( "trajs",           nargs="?",            default="storage/samples/latest", help="Specify the path to the trajectory file containing the trajectories to be analyzed. Default is 'storage/samples/latest'. If the default path is unchanged, ensure that the sampling script has been run prior to analysis.")
-    parser.add_argument( "--root",          default="storage",    help="Set the base directory where input data is located and where analysis outputs will be stored. The default directory is 'storage'. Modify this if your data and output directories are different.")
-    parser.add_argument( "--lag",           type=int,             default=100,                      help="Define the temporal lag (in steps) between frames in the ITO trajectory. This value will be used to analyse the reference trajs such that time steps match. The default value is 100.")
-    parser.add_argument( "--no_plot_start", action="store_false", help="Include this flag to prevent marking the starting point of trajectories in the generated plots. By default, the starting point is marked. This should only be used if the trajectories was generated with --init_from_eq")
+    parser.add_argument( "trajs",           nargs="?",            default="storage/samples/latest", help="Specify the path to the trajectory file containing the trajectories to be analyzed.")
+    parser.add_argument( "--root",          default="storage",    help="Base directory for input data and analysis outputs.")
+    parser.add_argument( "--lag",           type=int,             default=None,                     help="Temporal lag for the MD reference VAMP2. If unset, read from the sampling args.json (default 100).")
+    parser.add_argument( "--split",         default="match_sampling", choices=("train", "test", "all", "match_sampling"), help="ALA2 split for the MD reference. Default mirrors the sampling split.")
+    parser.add_argument( "--no_plot_start", action="store_false", help="Skip the start-of-trajectory marker in plots. Use only with --init_from_eq sampling.")
     # fmt: on
 
     main(parser.parse_args())

@@ -165,6 +165,35 @@ Running the script will calculate the VAMP2-scores of the trajectories as well a
 It will also plot and save marginal plots of dihedral angles compared with reference data as well as ramachandran of samples.
 
 
+## Midpoint Diffusion Bridge Variant
+
+This fork adds a diffusion bridge alternative to ITO: instead of learning the open-loop marginal `p(x_{t+Nτ} | x_t, N)`, the bridge model learns the two-sided conditional `p(x_{t+τ/2} | x_t, x_{t+τ})` and recovers arbitrary `2^k` resolution between two anchored endpoints by recursive binary subdivision. Two-sided anchoring removes ITO's open-loop drift; the bridge encodes a complementary conditional that can later be combined with a pretrained TLDDPM as an endpoint generator.
+
+Full design notes, math, file layout, gotchas, verification log, and the Phase 2/3 roadmap are in [`docs/bridge.md`](docs/bridge.md).
+
+### Train, sample, analyse
+
+```
+python scripts/train_bridge.py     # default: tau=1000, train on ALA2 trajs 0,1, devices=1
+python scripts/sample_bridge.py    # default: depth=3, sample endpoints from held-out traj 2
+python scripts/analyse_bridge.py   # reads tau and split from sampling args.json
+```
+
+Per-script flags via `--help`. Notable defaults that differ from the upstream TLDDPM scripts:
+
+- `train_bridge.py --split train` (trajs 0, 1) — pass `--split all` to use all three trajectories.
+- `train_bridge.py --devices 1 --accelerator auto` — Lightning will not silently launch multi-GPU DDP unless asked.
+- `sample_bridge.py --split test` (traj 2, held-out) — endpoint pairs are drawn per-trajectory so `start + τ` never crosses a trajectory boundary.
+- `sample_bridge.py` asserts `τ % 2^depth == 0` so every recursion midpoint lands on an integer MD frame and the VAMP2 reference lag is exact (no silent truncation).
+- `analyse_bridge.py` reads `τ` and the sampling split from the saved `args.json`; the MD reference defaults to the same split as sampling.
+
+Outputs follow the upstream pattern, in `storage/train_bridge/`, `storage/samples_bridge/`, and `storage/analysis_bridge/`. The `TLDDPM` model and `PaiNNTLScore` architecture are left untouched.
+
+### Aligned ITO vs Bridge evaluation
+
+For head-to-head comparison the upstream `train_tlddpm.py` / `sample_tlddpm.py` / `analyse_trajs.py` scripts now match the bridge scripts' evaluation hygiene: `--seed`, `--split` (default `train` / `test` / `match_sampling`), `--n_neighbors`, `--length_scale`, `--devices`, `--accelerator`, and `--grid` are exposed everywhere; `analyse_trajs.py` writes a canonical `metrics.json`; the upstream `overfit_batches=1` Lightning bug in `train_tlddpm.py` is removed. `scripts/summarise_ala2_metrics.py` aggregates all `metrics.json` files across runs, groups by `(grid, model_type)`, and reports mean / std across seeds. See [`docs/bridge.md`](docs/bridge.md) for the full runbook.
+
+
 To cite this work, please use the bibtex: 
 ```
 @inproceedings{

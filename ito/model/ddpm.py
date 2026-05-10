@@ -194,3 +194,32 @@ class TLDDPM(DDPMBase):
         )
         loss = scatter(loss, noise_batch.batch, reduce="mean").mean()
         return loss
+
+
+class BridgeDDPM(DDPMBase):
+    def sample(self, batch_0, batch_T, ode_steps=0):
+        batch_0 = batch_0.to(self.device)
+        batch_T = batch_T.to(self.device)
+
+        batch = batch_0.clone()
+        batch.x = torch.randn_like(batch.x, device=self.device)
+
+        def forward_callback(b):
+            return self.forward(b, batch_0, batch_T)
+
+        if ode_steps:
+            return self._ode_sample(batch, forward_callback, ode_steps=ode_steps)
+        return self._sample(batch, forward_callback=forward_callback)
+
+    def get_loss(self, batch):
+        batch_0 = batch["batch_0"]
+        batch_mid = batch["batch_mid"]
+        batch_T = batch["batch_T"]
+
+        noise_batch, epsilon = self.get_noise_img_and_epsilon(batch_mid)
+        epsilon_hat = self.forward(noise_batch, batch_0, batch_T)
+        loss = nn.functional.mse_loss(epsilon_hat.x, epsilon.x, reduction="none").sum(
+            -1
+        )
+        loss = scatter(loss, noise_batch.batch, reduce="mean").mean()
+        return loss
