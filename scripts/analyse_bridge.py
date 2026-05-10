@@ -2,10 +2,19 @@ import json
 import os
 from argparse import ArgumentParser
 
-import matplotlib.pyplot as plt
 import numpy as np
+import matplotlib.pyplot as plt
 
-from analyse_trajs import compute_dihedral_angles, get_vamp2, plot_marginal
+from analyse_trajs import (
+    circular_rmse,
+    compute_dihedral_angles,
+    distribution_metrics,
+    get_vamp2,
+    load_checkpoint_runtime_metrics,
+    load_runtime_metrics,
+    plot_marginal,
+    stability_metrics,
+)
 
 from ito import data, utils
 
@@ -29,6 +38,8 @@ def main(args):
     trajs = np.load(args.trajs)  # [n_pairs, 2^depth+1, n_atoms, 3]
     endpoints = np.load(os.path.join(sample_dir, "endpoints.npy"))  # [n_pairs, 2, n_atoms, 3]
     md_mid = np.load(os.path.join(sample_dir, "md_midpoints.npy"))  # [n_pairs, n_atoms, 3]
+    md_reference_path = os.path.join(sample_dir, "md_reference.npy")
+    md_reference = np.load(md_reference_path) if os.path.exists(md_reference_path) else None
 
     n_pairs, n_frames, n_atoms, _ = trajs.shape
     depth = int(np.log2(n_frames - 1))
@@ -42,7 +53,7 @@ def main(args):
         f"(depth={depth}, tau={tau}, ref_lag={ref_lag}, sampling_split={sampling_split!r})"
     )
 
-    closure_check(trajs, endpoints)
+    closure_metrics = closure_check(trajs, endpoints)
 
     flat = trajs.reshape(-1, n_atoms, 3)
     phi, psi = compute_dihedral_angles(flat, topology)
@@ -73,18 +84,40 @@ def main(args):
         "psi_circular_rmse": float(circular_rmse(bridge_mid_psi, md_mid_psi)),
     }
 
+    metrics = {
+        "model": "bridge",
+        "vamp2": float(vamp2_score),
+        "ref_vamp2": float(ref_vamp2_score),
+        "ref_lag": int(ref_lag),
+        "tau": int(tau),
+        "depth": int(depth),
+        "traj_length": int(n_frames - 1),
+        "n_pairs": int(n_pairs),
+        "sampling_split": sampling_split,
+        "ref_split": ref_split,
+        "seed": sample_args.get("seed"),
+        "grid": sample_args.get("grid"),
+        "midpoint": midpoint_metrics,
+    }
+    metrics.update(closure_metrics)
+    metrics.update(load_runtime_metrics(sample_dir, prefix="sampling"))
+    metrics.update(load_checkpoint_runtime_metrics(sample_args, prefix="training"))
+    metrics.update(distribution_metrics(phi, psi, phi_ref, psi_ref, bins=args.bins))
+    metrics.update(stability_metrics(trajs, coord_threshold=args.coord_threshold))
+
+    if md_reference is not None:
+        md_ref_phi, md_ref_psi = compute_dihedral_angles(
+            md_reference.reshape(-1, *md_reference.shape[2:]), topology
+        )
+        metrics["md_reference_phi_circular_rmse"] = float(
+            circular_rmse(phi, md_ref_phi)
+        )
+        metrics["md_reference_psi_circular_rmse"] = float(
+            circular_rmse(psi, md_ref_psi)
+        )
+
     json.dump(
-        {
-            "vamp2": float(vamp2_score),
-            "ref_vamp2": float(ref_vamp2_score),
-            "ref_lag": ref_lag,
-            "tau": tau,
-            "depth": depth,
-            "n_pairs": n_pairs,
-            "sampling_split": sampling_split,
-            "ref_split": ref_split,
-            "midpoint": midpoint_metrics,
-        },
+        metrics,
         open(os.path.join(analysis_dir, "metrics.json"), "w"),
         indent=4,
     )
@@ -109,6 +142,7 @@ def main(args):
     ax.set_ylabel("Psi")
     ax.legend()
     plt.savefig(os.path.join(analysis_dir, "ramachandran.pdf"))
+    print(f"analysis saved at {analysis_dir}")
 
 
 def closure_check(trajs, endpoints):
@@ -119,11 +153,10 @@ def closure_check(trajs, endpoints):
     print(f"closure check: max right endpoint error = {right_err:.3e}")
     assert left_err < 1e-6, "left endpoint drifted during recursion"
     assert right_err < 1e-6, "right endpoint drifted during recursion"
-
-
-def circular_rmse(a, b):
-    d = np.angle(np.exp(1j * (a - b)))
-    return np.sqrt(np.mean(d**2))
+    return {
+        "closure_left_max_abs": float(left_err),
+        "closure_right_max_abs": float(right_err),
+    }
 
 
 if __name__ == "__main__":
@@ -132,6 +165,8 @@ if __name__ == "__main__":
     parser.add_argument("trajs",   nargs="?", default="storage/samples_bridge/latest",  help="Path to the bridge trajectory .npy. tau is read from the sampling args.json next to it.")
     parser.add_argument("--root",  default="storage",                                   help="Base directory used by sampling.")
     parser.add_argument("--split", default="match_sampling", choices=("train", "test", "all", "match_sampling"), help="ALA2 split for the MD reference. Default mirrors the sampling split for an apples-to-apples comparison.")
+    parser.add_argument("--bins",  type=int, default=64,                                 help="Number of bins for circular and Ramachandran distribution metrics.")
+    parser.add_argument("--coord_threshold", type=float, default=10.0,                   help="Absolute coordinate threshold used for extreme-coordinate stability metrics.")
     # fmt: on
 
     main(parser.parse_args())

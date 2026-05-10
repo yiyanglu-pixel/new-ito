@@ -1,4 +1,5 @@
 import datetime
+import os
 
 import torch
 from torch_geometric.data import Batch, Data
@@ -46,3 +47,20 @@ def batch_to_numpy(batch):
 
 def get_timestamp():
     return datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def replace_symlink(src, dst):
+    if os.path.exists(dst) or os.path.islink(dst):
+        os.unlink(dst)
+    os.symlink(src=os.path.abspath(src), dst=dst)
+
+
+def reset_peak_cuda_memory():
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+
+
+def peak_cuda_memory_bytes():
+    if not torch.cuda.is_available():
+        return None
+    return int(torch.cuda.max_memory_allocated())

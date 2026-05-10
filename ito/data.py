@@ -49,10 +49,17 @@ class StochasticLaggedDataset(data.Dataset):
 
 class ALA2Dataset(StochasticLaggedDataset):
     def __init__(
-        self, max_lag, distinguish=False, scale=False, fixed_lag=False, path=None
+        self,
+        max_lag,
+        distinguish=False,
+        scale=False,
+        fixed_lag=False,
+        path=None,
+        split="all",
     ):
         self.atom_numbers = get_ala2_atom_numbers(distinguish=distinguish)
         trajs = get_ala2_trajs(path, scale)
+        trajs = select_ala2_split(trajs, split)
 
         super().__init__(trajs, max_lag, fixed_lag=fixed_lag)
 
@@ -120,6 +127,50 @@ def select_ala2_split(trajs, split):
     if split == "test":
         return trajs[2:]
     raise ValueError(f"unknown ala2 split: {split!r}")
+
+
+def get_valid_starts(trajs, horizon):
+    """Return start indices that keep a rollout inside one selected trajectory."""
+    valid_starts = []
+    offset = 0
+    for traj in trajs:
+        if len(traj) > horizon:
+            valid_starts.extend(range(offset, offset + len(traj) - horizon))
+        offset += len(traj)
+    return np.array(valid_starts, dtype=int)
+
+
+def validate_start_indices(start_idx, valid_starts):
+    invalid = np.setdiff1d(start_idx, valid_starts, assume_unique=False)
+    if len(invalid):
+        preview = ", ".join(str(i) for i in invalid[:5])
+        raise ValueError(
+            f"start_indices contains {len(invalid)} invalid starts "
+            f"for the selected split/horizon, e.g. {preview}"
+        )
+
+
+def sample_start_indices(trajs, horizon, n_samples, seed, start_indices=None):
+    """Choose or validate fixed starts for pair-matched ALA2 evaluation."""
+    valid_starts = get_valid_starts(trajs, horizon)
+    if start_indices is not None:
+        start_idx = np.asarray(start_indices, dtype=int)
+        validate_start_indices(start_idx, valid_starts)
+        return start_idx
+
+    if len(valid_starts) < n_samples:
+        raise ValueError(
+            f"only {len(valid_starts)} valid starts for horizon={horizon}; "
+            f"need n_samples={n_samples}"
+        )
+
+    rng = np.random.default_rng(seed)
+    return rng.choice(valid_starts, size=n_samples, replace=False)
+
+
+def gather_lagged_frames(flat_trajs, start_idx, lag, n_steps):
+    offsets = np.arange(n_steps + 1, dtype=int) * lag
+    return flat_trajs[start_idx[:, None] + offsets[None, :]]
 
 
 def get_ala2_trajs(path=None, scale=False):
