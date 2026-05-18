@@ -26,7 +26,12 @@ def main(args):
 
     print(f"saving checkpoints to {checkpoint_dir}")
     os.makedirs(train_dir, exist_ok=True)
-    json.dump(args.__dict__, open(os.path.join(train_dir, "args.json"), "w"), indent=4)
+
+    if args.val_fraction < 0 or args.val_fraction >= 1:
+        raise ValueError("val_fraction must be in [0, 1)")
+    use_validation = not args.no_validation and args.val_fraction > 0
+    args.validation_enabled = use_validation
+    args.checkpoint_selection = "val_best" if use_validation else "last"
 
     score_model_kwargs = {
         "n_features": args.n_features,
@@ -42,24 +47,66 @@ def main(args):
         score_model_kwargs=score_model_kwargs,
         diffusion_steps=args.diff_steps,
         lr=args.lr,
+        scheduler_t_max=args.scheduler_t_max,
+        ema_decay=args.ema_decay,
     )
+
+    train_trajs = data.select_ala2_split(
+        data.get_ala2_trajs(ala2_path, not args.unscaled), args.split
+    )
+    val_trajs = None
+    if use_validation:
+        train_trajs, val_trajs = data.split_train_validation_trajs(
+            train_trajs,
+            val_fraction=args.val_fraction,
+            min_length=args.tau + 1,
+        )
 
     dataset = data.ALA2BridgeDataset(
         path=ala2_path,
         tau=args.tau,
         distinguish=not args.indistinguishable,
         scale=not args.unscaled,
-        split=args.split,
+        trajs=train_trajs,
     )
+    val_dataset = None
+    if val_trajs is not None:
+        val_dataset = data.ALA2BridgeDataset(
+            path=ala2_path,
+            tau=args.tau,
+            distinguish=not args.indistinguishable,
+            scale=not args.unscaled,
+            trajs=val_trajs,
+        )
 
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
-
-    checkpoint_callback = ModelCheckpoint(
-        save_top_k=-1, save_last=True, dirpath=checkpoint_dir, filename="{epoch}"
+    val_dataloader = (
+        DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
+        if val_dataset is not None
+        else None
     )
+
+    args.train_dataset_size = len(dataset)
+    args.val_dataset_size = len(val_dataset) if val_dataset is not None else 0
+    json.dump(args.__dict__, open(os.path.join(train_dir, "args.json"), "w"), indent=4)
+
+    checkpoint_kwargs = {
+        "save_last": True,
+        "dirpath": checkpoint_dir,
+        "filename": "{epoch}",
+    }
+    if use_validation:
+        checkpoint_kwargs.update(
+            monitor=args.checkpoint_monitor,
+            mode="min",
+            save_top_k=args.save_top_k,
+        )
+    else:
+        checkpoint_kwargs["save_top_k"] = -1
+    checkpoint_callback = ModelCheckpoint(**checkpoint_kwargs)
     trainer = pl.Trainer(
         max_epochs=args.epochs,
-        gradient_clip_val=1.0,
+        gradient_clip_val=args.gradient_clip_val,
         accelerator=args.accelerator,
         devices=args.devices,
         callbacks=[checkpoint_callback],
@@ -67,21 +114,40 @@ def main(args):
 
     utils.reset_peak_cuda_memory()
     train_start = time.perf_counter()
-    trainer.fit(model, dataloader)
-    runtime = {
-        "train_seconds": time.perf_counter() - train_start,
-        "peak_cuda_memory_bytes": utils.peak_cuda_memory_bytes(),
-    }
-    json.dump(runtime, open(os.path.join(train_dir, "runtime.json"), "w"), indent=4)
-    best_model_path = (
-        checkpoint_callback.best_model_path or checkpoint_callback.last_model_path
-    )
-    utils.replace_symlink(
-        src=os.path.abspath(best_model_path),
-        dst=best_checkpoint_link,
-    )
-    utils.replace_symlink(src=os.path.abspath(train_dir), dst=train_dir_link)
-    print(f"best model checkpoint: {best_checkpoint_link}")
+    train_status = "completed"
+    failure = None
+    try:
+        if val_dataloader is not None:
+            trainer.fit(model, dataloader, val_dataloader)
+        else:
+            trainer.fit(model, dataloader)
+    except Exception as exc:
+        train_status = "failed_nan" if "loss is nan" in str(exc).lower() else "failed"
+        failure = repr(exc)
+        raise
+    finally:
+        best_model_path = (
+            checkpoint_callback.best_model_path or checkpoint_callback.last_model_path
+        )
+        runtime = {
+            "train_seconds": time.perf_counter() - train_start,
+            "peak_cuda_memory_bytes": utils.peak_cuda_memory_bytes(),
+            "train_status": train_status,
+            "checkpoint_selection": args.checkpoint_selection,
+            "checkpoint_monitor": args.checkpoint_monitor if use_validation else None,
+            "best_model_path": best_model_path or None,
+            "last_model_path": checkpoint_callback.last_model_path or None,
+        }
+        if failure is not None:
+            runtime["failure"] = failure
+        json.dump(runtime, open(os.path.join(train_dir, "runtime.json"), "w"), indent=4)
+        if best_model_path:
+            utils.replace_symlink(
+                src=os.path.abspath(best_model_path),
+                dst=best_checkpoint_link,
+            )
+            print(f"best model checkpoint: {best_checkpoint_link}")
+        utils.replace_symlink(src=os.path.abspath(train_dir), dst=train_dir_link)
 
 
 if __name__ == "__main__":
@@ -100,6 +166,13 @@ if __name__ == "__main__":
     parser.add_argument("--lr",                type=float,          default=1e-3,      help="Learning rate for the optimizer.")
     parser.add_argument("--tau",               type=int,            default=1000,      help="Bridge interval length (must be even). The model learns p(x_{t+tau/2} | x_t, x_{t+tau}).")
     parser.add_argument("--split",             default="train",     choices=("train", "test", "all"), help="ALA2 split. 'train' uses trajs 0,1; 'test' uses traj 2 (held-out for evaluation); 'all' uses all three.")
+    parser.add_argument("--val_fraction",      type=float,          default=0.05,      help="Fraction of each selected training trajectory tail used for validation checkpoint selection. Set 0 with --no_validation to reproduce last/all-checkpoint behavior.")
+    parser.add_argument("--no_validation",     action="store_true", help="Disable train-internal validation and save all epoch checkpoints.")
+    parser.add_argument("--checkpoint_monitor", default="val/loss", help="Metric monitored by ModelCheckpoint when validation is enabled.")
+    parser.add_argument("--save_top_k",        type=int,            default=3,         help="Number of monitored checkpoints to keep when validation is enabled.")
+    parser.add_argument("--gradient_clip_val", type=float,          default=1.0,       help="Gradient clipping value for pl.Trainer.")
+    parser.add_argument("--scheduler_t_max",   type=int,            default=20,        help="T_max for CosineAnnealingLR.")
+    parser.add_argument("--ema_decay",         type=float,          default=0.99,      help="EMA decay for model weights.")
     parser.add_argument("--seed",              type=int,            default=0,         help="Random seed for training.")
     parser.add_argument("--devices",           type=int,            default=1,         help="Number of devices for pl.Trainer. Defaults to 1 to avoid silently launching multi-GPU DDP.")
     parser.add_argument("--accelerator",       default="auto",      help="pl.Trainer accelerator (e.g. 'gpu', 'cpu', 'auto').")

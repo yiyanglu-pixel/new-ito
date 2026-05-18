@@ -17,6 +17,8 @@ class DDPMBase(pl.LightningModule):
         diffusion_steps=1000,
         lr=1e-3,
         beta_scheduler=None,
+        scheduler_t_max=20,
+        ema_decay=0.99,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -39,11 +41,11 @@ class DDPMBase(pl.LightningModule):
 
         self.diffusion_steps = diffusion_steps
         self.lr = lr
+        self.scheduler_t_max = scheduler_t_max
 
         self.ema = ema.ExponentialMovingAverage(
-            self.score_model.parameters(), decay=0.99
+            self.score_model.parameters(), decay=ema_decay
         )
-
 
     def forward(self, *args):
         score = self.score_model(*args)
@@ -51,10 +53,19 @@ class DDPMBase(pl.LightningModule):
 
     def training_step(self, batch, _):
         loss = self.get_loss(batch)
-        self.log("train/loss", loss)
+        self.log("train/loss", loss, prog_bar=True, sync_dist=True)
 
         if torch.isnan(loss):
             raise ValueError("Loss is NaN")
+
+        return loss
+
+    def validation_step(self, batch, _):
+        loss = self.get_loss(batch)
+        self.log("val/loss", loss, prog_bar=True, sync_dist=True)
+
+        if torch.isnan(loss):
+            raise ValueError("Validation loss is NaN")
 
         return loss
 
@@ -64,7 +75,7 @@ class DDPMBase(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
         lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=20
+            optimizer, T_max=self.scheduler_t_max
         )
 
         return {

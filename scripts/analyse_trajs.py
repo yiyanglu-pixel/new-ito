@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from argparse import ArgumentParser
 
 import matplotlib.pyplot as plt
@@ -55,6 +56,7 @@ def main(args):
         "seed": sample_args.get("seed"),
         "grid": sample_args.get("grid"),
     }
+    metrics.update(load_checkpoint_metadata(sample_args))
     metrics.update(load_runtime_metrics(sample_dir, prefix="sampling"))
     metrics.update(load_checkpoint_runtime_metrics(sample_args, prefix="training"))
     metrics.update(distribution_metrics(phi, psi, phi_ref, psi_ref, bins=args.bins))
@@ -134,16 +136,82 @@ def load_checkpoint_runtime_metrics(sample_args, prefix):
     if checkpoint is None:
         return {}
 
+    runtime = load_checkpoint_train_runtime(checkpoint)
+    if runtime:
+        return {f"{prefix}_{key}": value for key, value in runtime.items()}
+    return {}
+
+
+def load_checkpoint_metadata(sample_args):
+    checkpoint = sample_args.get("checkpoint")
+    if checkpoint is None:
+        return {}
+
+    checkpoint_realpath = os.path.realpath(checkpoint)
+    runtime = load_checkpoint_train_runtime(checkpoint)
+    metadata = {
+        "checkpoint_path": checkpoint,
+        "checkpoint_realpath": checkpoint_realpath,
+        "checkpoint_epoch": infer_checkpoint_epoch(checkpoint_realpath),
+    }
+    if runtime:
+        train_status = runtime.get("train_status")
+        if train_status is not None:
+            metadata["train_status"] = train_status
+        monitor = runtime.get("checkpoint_monitor")
+        if monitor is not None:
+            metadata["checkpoint_monitor"] = monitor
+        metadata["checkpoint_selection"] = infer_checkpoint_selection(
+            checkpoint,
+            checkpoint_realpath,
+            runtime,
+        )
+    else:
+        metadata["checkpoint_selection"] = infer_checkpoint_selection(
+            checkpoint,
+            checkpoint_realpath,
+            {},
+        )
+    return metadata
+
+
+def load_checkpoint_train_runtime(checkpoint):
     checkpoint_path = os.path.realpath(checkpoint)
     candidates = [
         os.path.dirname(os.path.dirname(checkpoint_path)),
         os.path.dirname(checkpoint_path),
     ]
     for train_dir in candidates:
-        metrics = load_runtime_metrics(train_dir, prefix=prefix)
-        if metrics:
-            return metrics
+        runtime_path = os.path.join(train_dir, "runtime.json")
+        if os.path.exists(runtime_path):
+            return json.load(open(runtime_path))
     return {}
+
+
+def infer_checkpoint_epoch(checkpoint_path):
+    basename = os.path.basename(checkpoint_path)
+    match = re.search(r"epoch=(\d+)", basename)
+    if match:
+        return int(match.group(1))
+    if basename == "last.ckpt":
+        return "last"
+    return None
+
+
+def infer_checkpoint_selection(checkpoint, checkpoint_realpath, runtime):
+    best_model_path = runtime.get("best_model_path")
+    if best_model_path and os.path.realpath(best_model_path) == checkpoint_realpath:
+        return runtime.get("checkpoint_selection") or "best"
+
+    if os.path.basename(checkpoint) == "best":
+        return runtime.get("checkpoint_selection") or "best"
+
+    if os.path.basename(checkpoint_realpath) == "last.ckpt":
+        return "last"
+
+    if runtime.get("train_status") == "failed_nan":
+        return "manual_pre_nan"
+    return "manual"
 
 
 def distribution_metrics(phi, psi, phi_ref, psi_ref, bins=64):

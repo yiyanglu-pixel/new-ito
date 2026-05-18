@@ -10,6 +10,7 @@ from analyse_trajs import (
     compute_dihedral_angles,
     distribution_metrics,
     get_vamp2,
+    load_checkpoint_metadata,
     load_checkpoint_runtime_metrics,
     load_runtime_metrics,
     plot_marginal,
@@ -100,6 +101,7 @@ def main(args):
         "midpoint": midpoint_metrics,
     }
     metrics.update(closure_metrics)
+    metrics.update(load_checkpoint_metadata(sample_args))
     metrics.update(load_runtime_metrics(sample_dir, prefix="sampling"))
     metrics.update(load_checkpoint_runtime_metrics(sample_args, prefix="training"))
     metrics.update(distribution_metrics(phi, psi, phi_ref, psi_ref, bins=args.bins))

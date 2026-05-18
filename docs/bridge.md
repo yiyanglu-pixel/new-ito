@@ -27,10 +27,12 @@ boundary. The bridge models a different quantity than ITO (conditional vs
 marginal) and is therefore complementary, not strictly a replacement.
 
 Phase 1 (this branch) trains the bridge at a single fixed `τ` with no `s`
-conditioning. Endpoints come from MD data — that is, the evaluation regime.
-Phase 2 (conditional `(τ, s)`) and Phase 3 (ITO-driven endpoint generator
-plus self-consistency / closure losses) are sketched in the plan and left
-unimplemented.
+conditioning. Endpoints come from MD data — that is, the diagnostic
+evaluation regime. This is an implementation choice, not a fundamental
+restriction of the bridge formulation. Phase 2 adds explicit `(τ, s)`
+conditioning; Phase 3 uses a coarse endpoint generator (ITO, BioEmu, or
+another endpoint proposal model) plus bridge refinement so evaluation can
+start from only `x_0`.
 
 ## 2. Method
 
@@ -46,8 +48,12 @@ Train the score network with the standard ε-prediction MSE
 ```
 L = E[ ‖ ε - ε_θ(x_{τ/2}^σ, σ; x_0, x_τ) ‖² ].
 ```
-Conditioning is on **both** endpoints. Phase 1 has no `t_phys / s` embedding;
-`τ` is implicit because the dataset only contains a single fixed `τ`.
+Conditioning is on **both** endpoints. The sampling pipeline knows `τ`, but
+Phase 1 has no `t_phys / s` embedding and the score network does not consume
+that interval metadata. `τ` is only implicit because the training dataset
+contains a single fixed `τ`. Phase 2 makes this explicit by passing
+`tau_phys` and `s_phys` through the batch and embedding them in the score
+network.
 
 ### Recursive sampler
 
@@ -222,13 +228,16 @@ Numbers reported from a fresh end-to-end run on this branch:
   `(x_0 + x_T) / 2`; very high-noise diffusion steps inherit a sane
   neighbor set instead of scrambled-coordinate edges. Distances and
   directions are still recomputed per step.
-- **No `t_phys` / `s` in Phase 1.** Adding them is the Phase 2 extension —
-  re-introduce `PositionalEmbedding("t_phys", n_features, max_tau)` per
-  endpoint and a parallel `s_phys` embedding to make the same network
-  cover arbitrary `τ` and arbitrary midpoint position.
-- **Endpoint source.** Phase 1 uses MD data. Phase 3 is the hybrid sampler
-  where a pretrained `TLDDPM` provides coarse anchors and the bridge
-  fills in between.
+- **No `t_phys` / `s` in Phase 1.** The evaluation code knows the endpoint
+  spacing, but the Phase 1 network does not receive it. Adding interval
+  metadata is the Phase 2 extension: pass `tau_phys` / `s_phys` through
+  batches and embed them before the diffusion score stage.
+- **Endpoint source.** Phase 1 uses MD endpoints, so it evaluates
+  endpoint-conditioned interpolation and gives Bridge more input
+  information than one-start ITO rollout. Phase 3 removes that extra MD
+  information by sourcing coarse endpoints from a model, either pretrained
+  `TLDDPM` for apples-to-apples conditional rollout or a structure /
+  equilibrium sampler such as BioEmu for long-lag endpoint proposals.
 - **Off-by-one in `DDPMBase._sample`.** The reverse loop starts at
   `diffusion_steps - 1`; this is inherited unchanged so bridge results
   remain comparable to TLDDPM under the same scheduler.
@@ -251,16 +260,33 @@ Numbers reported from a fresh end-to-end run on this branch:
    Wasserstein vs the bridge filled trajectory. The bridge should be
    tighter near endpoints and at least competitive elsewhere.
 
-## 9. Phase 2 / Phase 3 roadmap (not implemented)
+## 9. Phase 1.5 / Phase 2 / Phase 3 roadmap
 
-- **Phase 2 — `(τ, s)` conditioning.** Re-introduce `t_phys` and add an
-  `s_phys` embedding. Sample `τ` log-uniformly as ITO does and `s` over
-  admissible recursion depths. Single network handles arbitrary `τ` and
-  arbitrary midpoint position; recursion at depth-`k` then queries the
-  same network with `s = τ / 2^k`.
-- **Phase 3a — hybrid sampler.** Pretrained `TLDDPM` rolls out coarse
-  anchors at large `τ_coarse`; the bridge fills each interval. Eliminates
-  the dependence on MD endpoints at evaluation time.
+Detailed implementation cuts are tracked in
+[`docs/next_phase_modification_plan.md`](next_phase_modification_plan.md).
+
+- **Phase 1.5 — stability and checkpoint selection.** Implemented in this
+  branch: train-internal validation split, validation loss logging, val-best
+  checkpoint selection, and checkpoint metadata in analysis metrics for both
+  TLDDPM and Bridge training. This separates model quality from late-epoch
+  NaN failures.
+- **Phase 2a — multi-`τ` midpoint bridge.** First train on a discrete
+  interval set such as `{100, 200, 400, 800}` with `s = τ/2`. This makes
+  recursive depth-3 sampling stay inside the training interval distribution.
+- **Phase 2b — full `(τ, s)` conditioning.** Extend Phase 2a by sampling
+  `s` over admissible dyadic or arbitrary positions. A single network then
+  handles arbitrary `τ` and arbitrary midpoint position.
+- **Phase 3a — ITO + Bridge hybrid sampler.** Pretrained `TLDDPM` rolls out
+  coarse anchors at large `τ_coarse`; the bridge fills each interval. This
+  eliminates MD endpoint dependence at evaluation time and gives an
+  apples-to-apples comparison with pure ITO because both start only from
+  `x_0`.
+- **Phase 3a-bio — external endpoint proposal + Bridge.** Use BioEmu or
+  another structure / equilibrium sampler to propose right endpoints, then
+  Bridge fills paths. This is appropriate for long-lag settings where
+  `p(x_τ | x_0)` is close to equilibrium `π(x)`; it should not be treated as
+  a fair conditional rollout baseline at short or intermediate lag without
+  stating that assumption.
 - **Phase 3b — closure / self-consistency losses.** Add
   `‖ bridge(x_0, x_τ) − bridge(x_0, M) ⊕ bridge(M, x_τ) ‖²` to push
   one-step ≈ two-half-step consistency, plus a marginal-matching term

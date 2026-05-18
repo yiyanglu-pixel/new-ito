@@ -10,11 +10,18 @@ training by default, and removal of `overfit_batches=1`.
 - Test split: ALA2 trajectory 2.
 - Seeds: `0 1 2`.
 - Training: `--epochs 50 --batch_size 128 --lr 1e-3 --diff_steps 1000`.
+- Checkpoint selection: default Phase 1.5 protocol uses
+  `--val_fraction 0.05 --checkpoint_monitor val/loss --save_top_k 3`, with
+  validation drawn from the tail of train trajectories 0 and 1 only.
 - PaiNN: `--n_features 64 --n_layers 2 --n_neighbors 100 --length_scale 10`.
 - Sampling: `--ode_steps 50 --n_pairs/--samples 1000`.
 
 Use `--length_scale 3` for the paper-alignment sensitivity run, and apply it to
 both models.
+
+Use `--no_validation` only to reproduce the pre-Phase-1.5 last/all-checkpoint
+behavior. Formal comparisons should sample `train*/latest/best`, which now
+points to the validation-best checkpoint when validation is enabled.
 
 ## Grid A: original horizon
 

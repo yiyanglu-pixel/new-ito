@@ -61,7 +61,11 @@ def summarise(rows, group_keys):
             }
         )
         for metric in numeric_keys:
-            values = np.array([float(row[metric]) for row in group if metric in row])
+            values = np.array(
+                [float(row[metric]) for row in group if is_number(row.get(metric))]
+            )
+            if len(values) == 0:
+                continue
             out[f"{metric}.mean"] = float(values.mean())
             out[f"{metric}.std"] = float(values.std(ddof=1)) if len(values) > 1 else 0.0
         summary_rows.append(out)

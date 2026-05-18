@@ -56,10 +56,12 @@ class ALA2Dataset(StochasticLaggedDataset):
         fixed_lag=False,
         path=None,
         split="all",
+        trajs=None,
     ):
         self.atom_numbers = get_ala2_atom_numbers(distinguish=distinguish)
-        trajs = get_ala2_trajs(path, scale)
-        trajs = select_ala2_split(trajs, split)
+        if trajs is None:
+            trajs = get_ala2_trajs(path, scale)
+            trajs = select_ala2_split(trajs, split)
 
         super().__init__(trajs, max_lag, fixed_lag=fixed_lag)
 
@@ -105,10 +107,19 @@ class MidpointBridgeDataset(data.Dataset):
 
 
 class ALA2BridgeDataset(MidpointBridgeDataset):
-    def __init__(self, tau, distinguish=False, scale=False, path=None, split="all"):
+    def __init__(
+        self,
+        tau,
+        distinguish=False,
+        scale=False,
+        path=None,
+        split="all",
+        trajs=None,
+    ):
         self.atom_numbers = get_ala2_atom_numbers(distinguish=distinguish)
-        trajs = get_ala2_trajs(path, scale)
-        trajs = select_ala2_split(trajs, split)
+        if trajs is None:
+            trajs = get_ala2_trajs(path, scale)
+            trajs = select_ala2_split(trajs, split)
         super().__init__(trajs, tau)
 
     def process(self, x0, xmid, xT):
@@ -127,6 +138,30 @@ def select_ala2_split(trajs, split):
     if split == "test":
         return trajs[2:]
     raise ValueError(f"unknown ala2 split: {split!r}")
+
+
+def split_train_validation_trajs(trajs, val_fraction=0.05, min_length=1):
+    """Split each selected trajectory into fit/validation tails.
+
+    This is only for checkpoint selection. It deliberately operates inside the
+    selected training trajectories so the held-out ALA2 test trajectory remains
+    untouched for final metrics.
+    """
+    if not 0 < val_fraction < 1:
+        raise ValueError(f"val_fraction must be in (0, 1), got {val_fraction}")
+
+    fit_trajs = []
+    val_trajs = []
+    for traj in trajs:
+        n_val = max(min_length, int(round(len(traj) * val_fraction)))
+        if len(traj) - n_val < min_length:
+            raise ValueError(
+                "trajectory is too short for the requested validation split: "
+                f"len={len(traj)}, val_fraction={val_fraction}, min_length={min_length}"
+            )
+        fit_trajs.append(traj[:-n_val])
+        val_trajs.append(traj[-n_val:])
+    return fit_trajs, val_trajs
 
 
 def get_valid_starts(trajs, horizon):
