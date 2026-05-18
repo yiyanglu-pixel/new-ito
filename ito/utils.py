@@ -55,6 +55,12 @@ def replace_symlink(src, dst):
     os.symlink(src=os.path.abspath(src), dst=dst)
 
 
+def resolve_sample_device(device):
+    if device == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    return torch.device(device)
+
+
 def reset_peak_cuda_memory():
     if torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats()

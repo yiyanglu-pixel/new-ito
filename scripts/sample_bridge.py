@@ -10,6 +10,10 @@ from ito import data, utils
 from ito.model import ddpm
 
 
+def resolve_sample_device(device):
+    return utils.resolve_sample_device(device)
+
+
 def main(args):
     assert args.tau % (2**args.depth) == 0, (
         f"tau={args.tau} must be divisible by 2**depth={2**args.depth} so every "
@@ -30,10 +34,15 @@ def main(args):
     trajs_list = data.select_ala2_split(trajs_list, args.split)
     ala2_atom_numbers = data.get_ala2_atom_numbers(not args.indistinguishable)
 
-    model = ddpm.BridgeDDPM.load_from_checkpoint(args.checkpoint)
+    device = resolve_sample_device(args.device)
+    args.resolved_device = str(device)
+    model = ddpm.BridgeDDPM.load_from_checkpoint(args.checkpoint, map_location=device)
+    model.to(device)
     model.eval()
 
     torch.manual_seed(args.seed)
+    if device.type == "cuda":
+        torch.cuda.manual_seed_all(args.seed)
     ala2_trajs = np.concatenate(trajs_list)
     start_indices = (
         np.load(args.start_indices) if args.start_indices is not None else None
@@ -121,6 +130,7 @@ if __name__ == "__main__":
     parser.add_argument("--tau",               type=int,            default=1000,                               help="Endpoint separation in MD frames. Must match the tau used during training.")
     parser.add_argument("--depth",             type=int,            default=3,                                  help="Recursion depth k; output trajectory has 2^k+1 frames per pair. Must satisfy tau %% 2**depth == 0.")
     parser.add_argument("--ode_steps",         type=int,            default=50,                                 help="Number of steps for the DPM-Solver during sampling. Set to 0 for vanilla denoising.")
+    parser.add_argument("--device",            default="auto",      help="Sampling device: 'auto' uses CUDA when available; otherwise pass 'cpu', 'cuda', or a torch device string.")
     parser.add_argument("--seed",              type=int,            default=0,                                  help="RNG seed for selecting endpoint pairs.")
     parser.add_argument("--split",             default="test",      choices=("train", "test", "all"),           help="ALA2 split for endpoint sampling. Default 'test' (held-out traj 2).")
     parser.add_argument("--grid",              default=None,                                                   help="Optional evaluation grid label (e.g. A or B) saved to args.json.")

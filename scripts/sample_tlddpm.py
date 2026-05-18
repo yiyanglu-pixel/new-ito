@@ -11,6 +11,10 @@ from ito import data, utils
 from ito.model import ddpm
 
 
+def resolve_sample_device(device):
+    return utils.resolve_sample_device(device)
+
+
 def main(args):
     args.root = os.path.realpath(args.root)
     ala2_path = os.path.join(args.root, "data/ala2")
@@ -25,9 +29,14 @@ def main(args):
     ala2_trajs = np.concatenate(trajs_list)
     ala2_atom_numbers = data.get_ala2_atom_numbers(not args.indistinguishable)
 
-    model = ddpm.TLDDPM.load_from_checkpoint(args.checkpoint)
+    device = resolve_sample_device(args.device)
+    args.resolved_device = str(device)
+    model = ddpm.TLDDPM.load_from_checkpoint(args.checkpoint, map_location=device)
+    model.to(device)
     model.eval()
     torch.manual_seed(args.seed)
+    if device.type == "cuda":
+        torch.cuda.manual_seed_all(args.seed)
 
     horizon = args.lag * args.traj_length
     if args.single_start:
@@ -92,6 +101,7 @@ if __name__ == "__main__":
     parser.add_argument("--traj_length",       type=int,            default=100,                         help="The total number of steps (frames) in each generated trajectory.")
     parser.add_argument("--lag",               type=int,            default=100,                         help="Temporal lag between consecutive steps (frames) in the generated trajectory.")
     parser.add_argument("--ode_steps",         type=int,            default=50,                          help="Number of steps for the ODE solver during sampling. Set to 0 for normal denoising.")
+    parser.add_argument("--device",            default="auto",      help="Sampling device: 'auto' uses CUDA when available; otherwise pass 'cpu', 'cuda', or a torch device string.")
     parser.add_argument("--seed",              type=int,            default=0,                           help="RNG seed for selecting test starts and diffusion sampling.")
     parser.add_argument("--split",             default="test",      choices=("train", "test", "all"),    help="ALA2 split for start-frame sampling. Default 'test' (held-out traj 2).")
     parser.add_argument("--grid",              default=None,                                             help="Optional evaluation grid label (e.g. A or B) saved to args.json.")
